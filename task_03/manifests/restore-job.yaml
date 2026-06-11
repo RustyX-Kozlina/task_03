@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: backup-postgres-restore-job
+  namespace: state-web01
+spec:
+  template:
+    spec:
+      containers:
+        - name: pg-restore
+          image: postgres:16-alpine
+          env:
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_PASSWORD } }
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_USER } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_DB } }
+            - name: PGHOST
+              value: "db-postgres-0.db-postgres-headless.state-web01.svc.cluster.local"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              psql -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+              pg_restore -d $PGDATABASE /backups/postgres_latest.dump
+          volumeMounts:
+            - name: backup-dir
+              mountPath: /backups
+      restartPolicy: OnFailure
+      volumes:
+        - name: backup-dir
+          persistentVolumeClaim: { claimName: backup-storage-pvc }

@@ -1,0 +1,127 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: state-web01
+  labels:
+    org.bstu.student.fullname: "Aleksandrov-Vladimir-Sergeevich"
+    org.bstu.group: "AS-576"
+    org.bstu.variant: "w1"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-postgres-secret
+  namespace: state-web01
+type: Opaque
+data:
+  POSTGRES_PASSWORD: c3VwZXJzZWNyZXRwYXNzd29yZA== # supersecretpassword
+  POSTGRES_USER: cG9zdGdyZXM=
+  POSTGRES_DB: c3R1X2RiX3cx
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-storage-pvc
+  namespace: state-web01
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  storageClassName: default
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-postgres-headless
+  namespace: state-web01
+spec:
+  clusterIP: None
+  selector:
+    app: db-postgres
+  ports:
+    - port: 5432
+      name: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db-postgres
+  namespace: state-web01
+  labels:
+    org.bstu.student.fullname: "Aleksandrov-Vladimir-Sergeevich"
+    org.bstu.group: "AS-576"
+    org.bstu.variant: "w1"
+spec:
+  serviceName: "db-postgres-headless"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: db-postgres
+  template:
+    metadata:
+      labels:
+        app: db-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_PASSWORD } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_USER } }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_DB } }
+            - name: STU_ID
+              value: "2157425"
+            - name: STU_GROUP
+              value: "AS-576"
+            - name: STU_VARIANT
+              value: "w1"
+          resources:
+            limits: { cpu: "150m", memory: "128Mi" }
+          volumeMounts:
+            - name: db-data-volume
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: db-data-volume
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: "default"
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup-postgres-cronjob
+  namespace: state-web01
+spec:
+  schedule: "*/15 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: pg-dump
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_PASSWORD } }
+                - name: PGUSER
+                  valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_USER } }
+                - name: PGDATABASE
+                  valueFrom: { secretKeyRef: { name: db-postgres-secret, key: POSTGRES_DB } }
+                - name: PGHOST
+                  value: "db-postgres-0.db-postgres-headless.state-web01.svc.cluster.local"
+              command: ["/bin/sh", "-c", "pg_dump -F c -b -f /backups/postgres_latest.dump"]
+              volumeMounts:
+                - name: backup-dir
+                  mountPath: /backups
+          restartPolicy: OnFailure
+          volumes:
+            - name: backup-dir
+              persistentVolumeClaim: { claimName: backup-storage-pvc }
